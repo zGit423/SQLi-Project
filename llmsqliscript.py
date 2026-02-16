@@ -1,9 +1,11 @@
 import pandas as pd    #nickname to "pd", less typing, cleaner code
 from openai import OpenAI
+from sklearn.metrics import confusion_matrix
+
 
 client = OpenAI()
 
-ds = pd.read_csv(r"C:\Users\shock\CodingProjects\PythonProjects\SQLiV3.csv") #Named "ds" for DataSet
+ds = pd.read_csv(r"C:\Users\shock\CodingProjects\SQLi Project\SQLiV3.csv") #Named "ds" for DataSet
 
 
 #print(ds.head())   #Looks at the first 5 rows of the dataset
@@ -42,10 +44,73 @@ ds = ds.dropna(subset=["Label"])      #Deletes rows where Label is NaN.
 ds["Label"] = ds["Label"].astype(int)  #Converts labels from floats to integers because of .to_numeric()
 
 #Verify again
-print(ds["Label"].value_counts())  
-print(len(ds))       #Length is 30864
+# print(ds["Label"].value_counts())  
+# print(len(ds))       #Length is 30864
+
+#-------------------------Promting LLM-------------------------------------------------------------------------
+
+def ask_llm(sentence):
+    prompt = f"""
+You are a cybersecurity classifier.
+
+Determine whether the following input is a SQL injection attack.
+
+Reply with ONLY:
+1 if it is SQL injection
+0 if it is benign
+
+Input:
+{sentence}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0 # Setting the temperature to 0 makes the model choose the highest probability answer. 
+        #                  Forced binary output; rejecting bad answers instead of trusting them
+    )
+
+    answer = response.choices[0].message.content.strip()
+
+    if answer not in {"0", "1"}:
+        return None  # model failed to follow instructions
+
+    return int(answer)
 
 
+#testing on a small sub-set
+
+test_ds = ds.sample(10, random_state=42) #Randomly selects 10 rows from dataset. random_state ensure the same random rows
 
 
+#Cost Guard for API usage
+if len(test_ds) > 20:
+    raise ValueError("Too many rows for testing.")
+
+results = []
+
+for _, row in test_ds.iterrows():
+    sentence = row["Sentence"]
+    true_label = row["Label"]
+
+    pred = ask_llm(sentence)
+
+    results.append({
+        "Sentence": sentence,
+        "True_Label": true_label,
+        "LLM_Prediction": pred
+    })
+
+
+#Turn results into DataFrame
+results_df = pd.DataFrame(results)
+print(results_df)
+
+#Compute the Accuracy of the LLM
+valid = results_df.dropna()
+
+accuracy = (valid["True_Label"] == valid["LLM_Prediction"]).mean()
+print(f"Accuracy: {accuracy:.2f}")
 

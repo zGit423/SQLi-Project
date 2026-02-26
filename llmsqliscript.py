@@ -1,6 +1,6 @@
 import pandas as pd    #nickname to "pd", less typing, cleaner code
 from openai import OpenAI
-from sklearn.metrics import confusion_matrix
+import json
 
 
 client = OpenAI()
@@ -106,11 +106,94 @@ for _, row in test_ds.iterrows():
 
 #Turn results into DataFrame
 results_df = pd.DataFrame(results)
-print(results_df)
+# print(results_df)
 
 #Compute the Accuracy of the LLM
 valid = results_df.dropna()
 
 accuracy = (valid["True_Label"] == valid["LLM_Prediction"]).mean()
-print(f"Accuracy: {accuracy:.2f}")
+# print(f"Accuracy: {accuracy:.2f}")
 
+#-----------------LLM Generated Dataset----------------------------------------------------------------------------
+
+def generate_samples(n=40):
+    prompt = f"""
+Generate {n} user input strings.
+
+Half must be SQL injection attacks.
+Half must be benign inputs.
+
+Return ONLY JSON list where each item has:
+- sentence
+- label (1 = SQLi, 0 = benign)
+- attack_type (tautology, union, error-based, time-based, stacked, comment, blind, none)
+
+Return ONLY valid JSON.
+Do NOT include explanation.
+Do NOT include markdown.
+
+Format EXACTLY like this:
+
+[
+  {{"sentence":"example","label":1,"attack_type":"tautology"}}
+]
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
+    )
+
+    text = response.choices[0].message.content.strip()
+    data = json.loads(text)
+
+    return pd.DataFrame(data)
+
+
+gen_df = generate_samples(40)
+
+print(gen_df.head())
+
+#Number of payloads generated
+attack_counts = gen_df["label"].value_counts()
+print("Attack counts:")
+print(attack_counts)
+
+
+# Self-critique evaluation
+def judge_quality(sentence):
+    prompt = f"""
+Is the following a realistic SQL injection payload used in real attacks?
+
+Reply ONLY:
+valid
+nonsense
+
+Input:
+{sentence}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+
+    answer = response.choices[0].message.content.strip().lower()
+
+    if answer not in {"valid", "nonsense"}:
+        return None
+
+    return answer
+
+gen_df["quality"] = gen_df["sentence"].apply(judge_quality)
+
+
+#Compute rate; giving us the percentage of meaningful vs nonsense attacks
+print("Quality distribution:")
+print(gen_df["quality"].value_counts(normalize=True))
+
+#Types of attacks generated
+print("Attack types:")
+print(gen_df["attack_type"].value_counts())
